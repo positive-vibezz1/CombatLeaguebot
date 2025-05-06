@@ -1,0 +1,15 @@
+{
+    "bot_token": "BOT_TOKEN_HERE",          // Discord Bot Token (from Discord Developer Portal → Bot → Token)
+    "sheet_name": "SHEET_NAME_HERE",        // Name of the Google Sheet to use (must be shared with your service account)
+    "dev_override_ids": 0,                  // Discord User ID(s) who can use developer/override commands (can be single ID or list)
+    "notifications_channel_id": 0,          // Channel ID to send league notifications (signups, leaves, team disbands, etc.)
+    "match_channel_id": 0,                  // Channel ID to post match proposals
+    "score_channel_id": 0,                  // Channel ID to post score proposals
+    "results_channel_id": 0,                // Channel ID to post finalized match results
+    "panel_channel_id": 0,                  // Channel ID where League Command Panel is auto-posted
+    "matchups_category_id": 0,              // Category ID where matchup text channels will be created
+    "team_min_players": 1,                  // Minimum number of players required on a team
+    "team_max_players": 6,                  // Maximum number of players allowed on a team
+    "elo_win_points": 25,                   // ELO points gained when winning
+    "elo_loss_points": -25                  // ELO points lost when losing
+}
