@@ -58,16 +58,15 @@ class LeaguePanel(View):
 
     @discord.ui.button(label="🏷️ Create Team", style=discord.ButtonStyle.blurple)
     async def create_team(self, interaction: discord.Interaction, button: discord.ui.Button):
-
-        # Check if captain already on a team
         user_id = f"{interaction.user.display_name} ({interaction.user.id})"
-        for row in self.teams_sheet.get_all_values():
-            if user_id in row:
-                await interaction.response.send_message("❗ You are already on a team. Leave your team before creating a new one.", ephemeral=True)
+
+        # Check if user is already on a team
+        for team in self.teams_sheet.get_all_values():
+            if user_id in team:
+                await interaction.response.send_message("❗ You are already on a team. Leave your team first.", ephemeral=True)
                 return
 
-        # --- Team Name Modal ---
-        class TeamNameModal(discord.ui.Modal, title="Enter Team Name"):
+        class TeamNameModal(discord.ui.Modal, title="Create Team"):
             team_name = discord.ui.TextInput(label="Team Name", required=True)
 
             def __init__(self, parent_view):
@@ -77,136 +76,27 @@ class LeaguePanel(View):
             async def on_submit(self, modal_interaction: discord.Interaction):
                 team_name = self.team_name.value.strip()
 
-                # Check if team already exists
-                existing_teams = [row[0].strip().lower() for row in self.parent.teams_sheet.get_all_values()]
+                # Check for duplicate team names
+                existing_teams = [row[0].lower() for row in self.parent.teams_sheet.get_all_values()]
                 if team_name.lower() in existing_teams:
-                    await modal_interaction.response.send_message("❗ Team already exists. Choose another name.", ephemeral=True)
+                    await modal_interaction.response.send_message("❗ Team already exists.", ephemeral=True)
                     return
 
-                await modal_interaction.response.send_message(f"✅ Team name **{team_name}** selected! Now select players.", ephemeral=True)
+                guild = modal_interaction.guild
 
-                await modal_interaction.followup.send(view=SelectPlayersView(self.parent, team_name, modal_interaction.user, modal_interaction.guild.id), ephemeral=True)
+                # Create team roles
+                team_role = await guild.create_role(name=f"Team {team_name}")
+                captain_role = await guild.create_role(name=f"Team {team_name} Captain")
 
-        # --- Player Select View ---
-        class SelectPlayersView(discord.ui.View):
-            def __init__(self, parent, team_name, captain, guild_id):
-                super().__init__(timeout=600)
-                self.parent = parent
-                self.team_name = team_name
-                self.captain = captain
-                self.guild_id = guild_id
-                self.selected_players = []
-                self.min_starters = self.parent.config.get("team_min_players", 3)
-                self.max_total = self.parent.config.get("team_max_players", 6)
+                # Assign roles to captain
+                await modal_interaction.user.add_roles(team_role, captain_role)
 
-            @discord.ui.button(label="➕ Add Starter", style=discord.ButtonStyle.green)
-            async def add_starter(self, interaction: discord.Interaction, button: discord.ui.Button):
-                await self.select_player(interaction, starter=True)
+                # Add team to sheet with captain only
+                self.parent.teams_sheet.append_row([team_name, f"{modal_interaction.user.display_name} ({modal_interaction.user.id})"] + [""] * 5)
 
-            @discord.ui.button(label="➕ Add Sub", style=discord.ButtonStyle.blurple)
-            async def add_sub(self, interaction: discord.Interaction, button: discord.ui.Button):
-                await self.select_player(interaction, starter=False)
+                await modal_interaction.response.send_message(f"✅ Team **{team_name}** created! Invite players to join your team.", ephemeral=True)
+                await self.parent.send_notification(f"🎉 **Team Created:** `{team_name}` by {modal_interaction.user.mention}")
 
-            @discord.ui.button(label="📩 Send Invites", style=discord.ButtonStyle.green)
-            async def send_invites(self, interaction: discord.Interaction, button: discord.ui.Button):
-                if len([p for p, role in self.selected_players if role == "Starter"]) < self.min_starters:
-                    await interaction.response.send_message(f"❗ You must select at least {self.min_starters} starters.", ephemeral=True)
-                    return
-
-                if len(self.selected_players) > self.max_total:
-                    await interaction.response.send_message(f"❗ Maximum team size is {self.max_total}.", ephemeral=True)
-                    return
-
-                success, fail = [], []
-
-                for player, role in self.selected_players:
-                    try:
-                        view = AcceptDenyInviteView(self.parent, self.captain, self.team_name, player, role, self.guild_id)
-                        await player.send(f"You are invited to join **{self.team_name}** as a **{role}**.", view=view)
-                        success.append(player.display_name)
-                    except:
-                        fail.append(player.display_name)
-
-                await interaction.response.send_message(f"✅ Invites sent to: {', '.join(success)}" + (f"\n❗ Could not DM: {', '.join(fail)}" if fail else ""), ephemeral=True)
-
-            async def select_player(self, interaction: discord.Interaction, starter=True):
-                members = [m async for m in interaction.guild.fetch_members(limit=None)]
-
-                existing_members = set()
-                for team in self.parent.teams_sheet.get_all_values():
-                    existing_members.update(team[1:7])
-
-                players = [
-                    m for m in members
-                    if self.parent.player_signed_up(m.id)
-                    and f"{m.display_name} ({m.id})" not in existing_members
-                    and m != self.captain
-                    and m not in [p for p, _ in self.selected_players]
-                ]
-
-                if not players:
-                    await interaction.response.send_message("❗ No available players to select.", ephemeral=True)
-                    return
-
-                options = [discord.SelectOption(label=m.display_name, value=str(m.id)) for m in players[:25]]
-                select = discord.ui.Select(placeholder="Pick Player", options=options)
-
-                async def callback(select_interaction):
-                    player_id = int(select.values[0])
-                    player = interaction.guild.get_member(player_id)
-
-                    self.selected_players.append((player, "Starter" if starter else "Sub"))
-                    await select_interaction.response.send_message(f"✅ Added {player.mention} as {'Starter' if starter else 'Sub'}.", ephemeral=True)
-
-                select.callback = callback
-                view = discord.ui.View(timeout=300)
-                view.add_item(select)
-                await interaction.response.send_message("Select player:", view=view, ephemeral=True)
-
-        # --- Accept / Deny Invite View ---
-        class AcceptDenyInviteView(discord.ui.View):
-            def __init__(self, parent, captain, team_name, invitee, role, guild_id):
-                super().__init__(timeout=300)
-                self.parent = parent
-                self.captain = captain
-                self.team_name = team_name
-                self.invitee = invitee
-                self.role = role
-                self.guild_id = guild_id
-
-            @discord.ui.button(label="✅ Accept", style=discord.ButtonStyle.green)
-            async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
-                guild = self.parent.bot.get_guild(self.guild_id)
-                if guild is None:
-                    await interaction.response.send_message("❗ Guild not available or invite expired.", ephemeral=True)
-                    return
-
-                for idx, team in enumerate(self.parent.teams_sheet.get_all_values(), 1):
-                    if team[0].lower() == self.team_name.lower():
-                        for i in range(1, 7):
-                            if team[i] == "":
-                                self.parent.teams_sheet.update_cell(idx, i+1, f"{self.invitee.display_name} ({self.invitee.id})")
-                                break
-                        break
-                else:
-                    self.parent.teams_sheet.append_row([self.team_name, f"{self.captain.display_name} ({self.captain.id})", f"{self.invitee.display_name} ({self.invitee.id})"] + [""]*4)
-
-                team_role = discord.utils.get(guild.roles, name=f"Team {self.team_name}")
-                if not team_role:
-                    team_role = await guild.create_role(name=f"Team {self.team_name}")
-
-                member = guild.get_member(self.invitee.id)
-                if member:
-                    await member.add_roles(team_role)
-                    await interaction.response.send_message(f"✅ You joined **{self.team_name}**!", ephemeral=True)
-                else:
-                    await interaction.response.send_message("❗ You are not in the server.", ephemeral=True)
-
-            @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.red)
-            async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
-                await interaction.response.send_message(f"❌ You declined the invite to **{self.team_name}**.", ephemeral=True)
-
-        # Start with team name modal
         await interaction.response.send_modal(TeamNameModal(self))
 
     # -------------------- PROPOSE MATCH --------------------
@@ -550,40 +440,134 @@ class LeaguePanel(View):
     @discord.ui.button(label="👥 Join Team", style=discord.ButtonStyle.blurple)
     async def join_team(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        class JoinTeamView(View):
-            def __init__(self, parent, teams):
+        class TeamSearchModal(discord.ui.Modal, title="Search Team Name"):
+            query = discord.ui.TextInput(label="Enter Team Name", required=True)
+
+            def __init__(self, parent_view):
+                super().__init__()
+                self.parent_view = parent_view
+
+            async def on_submit(self, interaction: discord.Interaction):
+                search = self.query.value.lower()
+                all_teams = [row[0] for row in self.parent_view.teams_sheet.get_all_values() if row[0]]
+
+                # Find closest matches
+                matches = [team for team in all_teams if search in team.lower()]
+                if not matches:
+                    matches = all_teams[:25]  # fallback to showing all
+
+                view = TeamSelectView(self.parent_view, matches, interaction.user)
+                await interaction.response.send_message("Select the team you want to join:", view=view, ephemeral=True)
+
+        class TeamSelectView(discord.ui.View):
+            def __init__(self, parent_view, teams, user):
                 super().__init__(timeout=300)
-                self.parent = parent
+                self.parent_view = parent_view
                 self.teams = teams
-                self.selected_team = None
+                self.user = user
 
                 options = [discord.SelectOption(label=team, value=team) for team in self.teams]
-                self.team_select = discord.ui.Select(placeholder="Select Team to Join", options=options)
+                self.team_select = discord.ui.Select(placeholder="Select Team", options=options)
                 self.team_select.callback = self.select_team
                 self.add_item(self.team_select)
 
-                self.join_button = discord.ui.Button(label="✅ Join Selected Team", style=discord.ButtonStyle.green)
-                self.join_button.callback = self.join_team_confirm
-                self.add_item(self.join_button)
+            async def select_team(self, interaction: discord.Interaction):
+                selected_team = self.team_select.values[0]
 
-            async def select_team(self, interaction):
-                self.selected_team = self.team_select.values[0]
-                await interaction.response.defer()
-
-            async def join_team_confirm(self, interaction):
-                if not self.selected_team:
-                    await interaction.response.send_message("Please select a team first.", ephemeral=True)
+                guild = interaction.guild
+                team_role = discord.utils.get(guild.roles, name=f"Team {selected_team}")
+                if not team_role:
+                    await interaction.response.send_message("❗ Team role does not exist.", ephemeral=True)
                     return
 
-                team_role = discord.utils.get(interaction.guild.roles, name=f"Team {self.selected_team}")
-                if team_role:
-                    await interaction.user.add_roles(team_role)
-                    await interaction.response.send_message(f"✅ You joined **{self.selected_team}**.", ephemeral=True)
-                else:
-                    await interaction.response.send_message("Team role does not exist.", ephemeral=True)
+                captain = None
+                for member in team_role.members:
+                    captain_role = discord.utils.get(guild.roles, name=f"Team {selected_team} Captain")
+                    if captain_role and captain_role in member.roles:
+                        captain = member
+                        break
 
-        teams = [row[0] for row in self.teams_sheet.get_all_values() if row[0]]
-        await interaction.response.send_message("Join a team:", view=JoinTeamView(self, teams), ephemeral=True)
+                if not captain:
+                    await interaction.response.send_message("❗ Could not find team captain.", ephemeral=True)
+                    return
+
+                try:
+                    # Try DM
+                    await captain.send(
+                        f"📥 **{self.user.display_name}** wants to join **{selected_team}**. Approve?",
+                        view=AcceptDenyJoinRequestView(self.parent_view, selected_team, self.user, guild.id)
+                    )
+                    await interaction.response.send_message("✅ Request sent to team captain via DM.", ephemeral=True)
+
+                except discord.Forbidden:
+                    # Fallback → Private "team-requests" channel
+                    fallback_channel = discord.utils.get(guild.text_channels, name="team-requests")
+                    if fallback_channel is None:
+                        overwrites = {
+                            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                            captain: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                        }
+                        fallback_channel = await guild.create_text_channel("team-requests", overwrites=overwrites)
+                    else:
+                        await fallback_channel.set_permissions(captain, read_messages=True, send_messages=True)
+
+                    await fallback_channel.send(
+                        f"📥 {captain.mention} **{self.user.display_name}** wants to join **{selected_team}**. Approve?",
+                        view=AcceptDenyJoinRequestView(self.parent_view, selected_team, self.user, guild.id)
+                    )
+                    await interaction.response.send_message("✅ Captain's DMs closed, sent request to private channel.", ephemeral=True)
+
+                    # Auto delete fallback channel after 5 minutes if no action
+                    async def auto_delete(channel):
+                        await discord.utils.sleep_until(discord.utils.utcnow() + discord.timedelta(minutes=5))
+                        if len([m async for m in channel.history(limit=1)]) > 0:
+                            await channel.delete()
+
+                    self.parent_view.bot.loop.create_task(auto_delete(fallback_channel))
+
+        class AcceptDenyJoinRequestView(discord.ui.View):
+            def __init__(self, parent_view, team_name, invitee, guild_id):
+                super().__init__(timeout=300)
+                self.parent_view = parent_view
+                self.team_name = team_name
+                self.invitee = invitee
+                self.guild_id = guild_id
+
+            @discord.ui.button(label="✅ Accept", style=discord.ButtonStyle.success)
+            async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+                guild = self.parent_view.bot.get_guild(self.guild_id)
+                team_role = discord.utils.get(guild.roles, name=f"Team {self.team_name}")
+
+                if not team_role:
+                    await interaction.response.send_message("❗ Team role no longer exists.", ephemeral=True)
+                    return
+
+                await self.invitee.add_roles(team_role)
+
+                # Add to sheet
+                for idx, row in enumerate(self.parent_view.teams_sheet.get_all_values(), 1):
+                    if row[0].lower() == self.team_name.lower():
+                        for i in range(1, 7):
+                            if row[i] == "":
+                                self.parent_view.teams_sheet.update_cell(idx, i+1, f"{self.invitee.display_name} ({self.invitee.id})")
+                                break
+                        break
+
+                await interaction.response.send_message("✅ Player added to team.", ephemeral=True)
+
+                # Auto delete channel
+                if interaction.channel.name == "team-requests":
+                    await interaction.channel.delete()
+
+            @discord.ui.button(label="❌ Deny", style=discord.ButtonStyle.danger)
+            async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
+                await interaction.response.send_message("❌ Request denied.", ephemeral=True)
+
+                if interaction.channel.name == "team-requests":
+                    await interaction.channel.delete()
+
+        await interaction.response.send_modal(TeamSearchModal(self))
 
     # -------------------- LEAVE TEAM --------------------
 
@@ -617,6 +601,13 @@ class LeaguePanel(View):
     async def unsignup(self, interaction: discord.Interaction, button: discord.ui.Button):
         username_id = f"{interaction.user.display_name} ({interaction.user.id})"
 
+        # Check if on a team first
+        for team in self.teams_sheet.get_all_values():
+            if username_id in team:
+                await interaction.response.send_message("❗ You are currently on a team. Leave your team before unsigning.", ephemeral=True)
+                return
+
+        # Check if signed up
         for idx, row in enumerate(self.players_sheet.get_all_values(), 1):
             if row[0] == username_id:
                 self.players_sheet.delete_rows(idx)
@@ -624,7 +615,8 @@ class LeaguePanel(View):
                 await self.send_notification(f"❌ {interaction.user.mention} has left the league.")
                 return
 
-        await interaction.response.send_message("You are not signed up.", ephemeral=True)
+        await interaction.response.send_message("❗ You are not signed up.", ephemeral=True)
+
 
     # -------------------- DISBAND TEAM --------------------
 
@@ -666,7 +658,6 @@ class LeaguePanel(View):
 
         modal = DisbandModal(self)
         await interaction.response.send_modal(modal)
-
 
 
 
