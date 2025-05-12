@@ -1,6 +1,6 @@
 {
-    "bot_token": "MTM2Nzc0MDUxODAyMDI4ODUzMg.GRODNf.ivvtuPOCKTvI3Aqdo1AJdpcyUMPHqVOIoDjHB4",
-    "sheet_name": "LeagueData",
+    "bot_token": "Your_TOKEN_HERE",
+    "sheet_name": "YOUR_SHEET_NAME_HERE",
 
     "dev_override_ids": [
         1368820073443364905
