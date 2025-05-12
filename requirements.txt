@@ -1,0 +1,7 @@
+discord.py
+gspread
+oauth2client
+gspread-formatting
+pytz
+datetime
+asyncio
