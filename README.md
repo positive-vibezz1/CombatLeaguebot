@@ -28,9 +28,9 @@ A full-featured Discord bot for running competitive leagues with Google Sheets a
 ## ✅ Full Setup Guide
 
 ### 1. **Clone the Repository**
-```bash
-git clone https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git
-cd YOUR_REPO_NAME
+
+git clone https://github.com/Trodd/CombatLeaguebot.git
+cd CombatLeaguebot
 
 ### 2. **Create Google Service Account Credentials**
         1. Go to https://console.cloud.google.com/
